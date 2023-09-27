@@ -363,5 +363,5 @@ cv <- train(log(charges) ~ age + smoker, data = costs, method =
 cv
 ```
 
-Although all the models have a similar RMSE, .39 - .46, the linear regression model is misleading since the data is not well explained linearly. Between the regression tree and boosted model, the regression tree, even without pruning, has a surprisingly lower RMSE which suggests it is the better model.
+Although all the models have a similar RMSE, .39 - .46, the linear regression model is misleading since the data is not well explained linearly. Between the regression tree and boosted model, the regression tree, even without pruning, has a surprisingly lower RMSE which suggests it is the better model. However, in reality, it is likely overfit.
 
