@@ -1,0 +1,367 @@
+---
+title: "Medical Costs Analysis"
+author: "Josué Ortiz & Olin Yoder"
+date: "2023-03-29"
+output:
+  word_document: default
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Loading Libraries
+```{r, message = FALSE}
+library(tidyverse)
+library(ggplot2)
+library(stats)
+library(lmtest)
+library(gvlma)
+library(regclass)
+library(MASS)
+library(leaps)
+library(gbm)
+library(caret)
+library(knitr)
+library(doBy)
+library(rpart.plot)
+library(magrittr)
+library(caTools)
+library(dplyr)
+```
+
+```{r pressure, include=FALSE}
+costs <- read.csv('/Users/olinyoder/Desktop/Spring 2023/BSAN 440/Datasets/insurance.csv')
+```
+
+## Data Dictionary
+https://www.kaggle.com/datasets/mirichoi0218/insurance
+```{R}
+data.desc <- data.frame(Variable = c("Age", "Sex","BMI","Children","Smoker","Region","Charges"),
+                        Explanation = c("Age of primary beneficiary", 
+                                        "Insurance contractor gender: Male or Female",
+                                        "Body mass index",
+                                        "Number of children covered by health insurance / Number of dependents",
+                                        "Whether the individual smokes",
+                                        "The beneficiary's US location: NE, SE, SW, NW",
+                                        "Individual medical costs billed by health insurance"))
+kable(data.desc)
+```
+
+## Data Highlights
+##### Summary of variables
+```{r}
+kable(summary(costs))
+```
+##### NA values
+```{r}
+sum(is.na(costs))
+```
+There are no missing or null values in the data set.
+
+##### Size of data set
+```{r}
+dim(costs)
+```
+There are 1338 observations and seven variables
+
+### Medical Charges by Gender
+```{r}
+ggplot(costs, aes(x = sex, y = charges))+
+  geom_boxplot()+
+  xlab("Sex")+
+  ylab("Charges")
+```
+
+### Is there a significant difference in the charges between males and females?
+
+$$
+{H_0}= \text{There is no difference in the average charge between males and females}\\
+{H_a}= \text{The average charge for males is higher than females}
+$$
+
+
+```{r, echo = FALSE}
+chargeSex <- summaryBy(charges  ~ sex, data=costs,na.rm=TRUE)
+kable(chargeSex, col.names = c('Sex', 'Average Charge'))
+```
+
+```{r, message = FALSE}
+ggplot(costs, aes(charges))+
+  geom_histogram(color="white", fill="darkgray")+
+  facet_grid(sex~.)+
+  xlab("Charges")
+```
+
+
+
+Although there is not normality among charges by sex, since the data set is large enough, a t-test can be used.
+```{r}
+t.test(costs$charges ~ costs$sex, alternative = "greater")
+```
+Since the p-value, .9821, is greater than .05, we fail to reject that the average charge for males is higher than the average charge for females.
+
+### Medical Charges by Region
+```{r}
+ggplot(costs, aes(x = region, y = charges))+
+  geom_boxplot()+
+  xlab("Region")+
+  ylab("Charges")
+```
+
+
+### Is there a significant difference in the charges between regions?
+
+$$
+{H_0}= \text{There is no difference in the average charge between regions}\\
+{H_a}= \text{The average charge for regions is different}
+$$
+
+```{r, message = FALSE}
+ggplot(costs, aes(charges))+
+  geom_histogram(color="white", fill="darkgray")+
+  facet_grid(region~.)+
+  xlab("Charges")
+```
+
+There is not normality among charges for each regions which could pose a potential problem for an anova test. Regardless, let's run an anova test without any transformation of charges.
+
+```{r}
+res.aov <- aov(charges ~ region, data = costs)
+summary(res.aov)
+```
+
+Since the p-value, .0309, is less than .05, we reject that the average charges across regions are the same.
+
+However, what if the normality among charges for each region were normally distributed?
+```{r, message = FALSE}
+ggplot(costs, aes(log10(charges)))+
+  geom_histogram(color="white", fill="darkgray")+
+  facet_grid(region~.)+
+  xlab("Charges")
+```
+
+```{r}
+res.aov2 <- aov(log10(charges) ~ region, data = costs)
+summary(res.aov2)
+```
+Since the p-value, .241, is greater than .05, we fail to reject that the average charges across regions are the same. This contradicts our earlier conclusion, which could be a type 1 error (false-positive). 
+Normally, anova tests handle non normal distributions in a manner where the false-positive rate (rejecting a true null) does not increase dramatically because of the skewness in the distribution; however, that is not the case for our data.
+
+
+### How do other variables relate to charges?
+#### Charges vs. Children
+```{r}
+ggplot(costs, aes(x = children, y = charges))+
+  geom_point()+
+  xlab("Children")+
+  ylab("Charges")
+```
+
+
+There appears to be a slight negative relationship between a patient's charges and the number of children.
+
+#### Charges vs. Age
+
+```{r}
+ggplot(costs, aes(x = age, y = charges))+
+  geom_point()+
+  xlab("Age")+
+  ylab("Charges")
+```
+
+
+There is a positive, somewhat linear trend between age and charges. However, there are three distinctive lines suggesting that there is variables we need to take into consideration.
+
+
+#### Charges vs. BMI
+
+```{r}
+ggplot(costs, aes(x = bmi, y = charges))+
+  geom_point()+
+  xlab("BMI")+
+  ylab("Charges")
+```
+
+
+There is a moderate, positive, linear relationship between charges and BMI.
+
+#### Charges vs. Smoking
+
+```{r}
+ggplot(costs, aes(x = smoker, y = charges))+
+  geom_boxplot()+
+  xlab("Smoker")+
+  ylab("Charges")
+```
+
+
+Patients who smoke have a much higher median average charge than those who do not.
+
+## Creating a Model to Predict a Patient's Charge
+
+
+
+### Linear Regression
+
+$$
+{H_0}= \text{No variables are signficant in predicting a patient's charges}\\
+{H_a}= \text{At least one variable is significant in predicitng a patient's charges}
+$$
+
+##### 1) Fit a saturated model
+```{r}
+saturated_lm <- lm(charges ~., costs)
+summary(saturated_lm)
+```
+All variables except sex are significant in predicting a patient's charge.
+Additionally, since the f-test returns a p-value of <2.2e-16, we reject the null hypothesis and conclude that at least one variable in significant in predicting charges.
+
+```{r}
+hist(costs$charges, main= "Distribution of Charges", xlab = "Charges")
+shapiro.test(costs$charges)
+```
+Since charges is not normally distributed, a transformation may be necessary to meet the model assumptions.
+### Box-Cox
+```{r}
+bc <- boxcox(charges ~ ., data=costs)
+```
+
+```{r}
+lambda_bc2 <- bc$x[which.max(bc$y)]
+lambda_bc2
+```
+
+Since lambda, .14, is close to 0, we can take a log transformation is adequate.
+
+##### 2) Refit a saturated model, this time with a log transformation
+```{r}
+saturated_log_lm <- lm(log(charges) ~., costs)
+summary(saturated_log_lm)
+```
+This time, all variables are significant. However, oftentimes a simpler model is better.
+
+##### 3) Feature Selection
+```{r}
+# variance inflation factor - test for multicollinearity across predictor variables
+VIF(saturated_lm)
+```
+Since all variables have a GVIF^(1/(2*Df)) near 1, there should not be an issue with multicollinearity. In that case, we will simply use forward stepwise selection instead of ridge, lasso, or elastic-net.
+
+```{r}
+forward <- regsubsets(log(charges) ~., costs, nvmax = 6, method = 'forward')
+forward_summary <- summary(forward)
+
+#using r^2
+plot(forward_summary$adjr2, xlab="Number of Variables",
+ylab="Adj r^2", type = "b", pch=17,col="black")
+
+which.max(forward_summary$adjr2)
+```
+According to adj. r^2, the best model contains all six variables, which is the saturated log model from above. However, from the plot, we can see that a model with two variables performs nearly as well as a model with six variables. 
+
+```{r}
+coef(forward, 2)
+```
+
+##### 4) Create Model
+```{r}
+new_model <- lm(log(charges) ~ age + smoker, costs)
+summary(new_model)
+```
+
+$$
+ln(charges) = 7.38 + .036(age) + 1.547(smokerYes)
+$$
+
+##### 5) Model Diagnostics
+
+```{r}
+gvlma(new_model)
+```
+
+```{r}
+par(mfrow=c(2,3))
+
+plot(new_model)
+hist(resid(new_model), main = "Distrbution of Residuals", xlab = "Residuals")
+hist(stdres(new_model), breaks = 20, xlim = c(-5,5), main = "Distribution of Standardized Residuals", xlab = "Standardized Residuals")
+abline(v = -3)
+abline(v = 3)
+```
+
+Since the data does not follow the assumptions for a linear model well, we will instead take a tree-based approach.
+
+### Decision Tree
+To keep a constant response variable, we will take the log of charges again.
+```{r}
+sample_data = sample.split(costs, SplitRatio = 0.7)
+train_data <- subset(costs, sample_data == TRUE)
+test_data <- subset(costs, sample_data == FALSE)
+
+dtmodel <- rpart(log(charges) ~ ., train_data)
+rpart.plot(dtmodel)
+```
+
+### Boosted Model
+```{r}
+costs[sapply(costs, is.character)] <- lapply(costs[sapply(costs, is.character)], 
+                                             as.factor)
+set.seed(3456)
+trainIndex <- createDataPartition(costs$charges, p = .7, 
+                                  list = FALSE, 
+                                  times = 1)
+costsTrain <- costs[trainIndex,]
+costsTest  <- costs[-trainIndex,]
+```
+
+```{r, warning = FALSE, message = FALSE}
+costsGBM =gbm(log(charges)~.,data=costsTrain, distribution="gaussian",
+                     n.trees=9000, interaction.depth=1, shrinkage = .001)
+costs.best.iter <- gbm.perf(costsGBM, method = "OOB")
+print(costs.best.iter)
+```
+The number of trees is set to 9000, although that many is not necessary.
+
+```{r}
+summary(costsGBM, plotit = FALSE)
+```
+Whether a person is a smoker and their age play the largest role in determining their charges.
+
+### Which model is better? 
+##### Boosted
+```{r, message=FALSE}
+costsPre = predict(costsGBM,newdata = costsTest)
+costsPreRMSE <- sqrt(mean((costsPre - log(costsTest$charges))^2))
+costsPreRMSE
+```
+
+##### Regression Tree
+```{r}
+train <- trainControl(method = "cv", number = 10)
+
+dtRMSE = train(
+   log(charges) ~ ., 
+   data = costs, 
+   method = "rpart",
+   tuneGrid = expand.grid(cp = seq(from = 0, to = 0.1, by = 0.01)),
+   metric = "RMSE",
+   trControl = train
+)
+
+dtRMSE
+```
+At cp = 0, RMSE is the lowest.
+
+#### Linear Regression
+```{r}
+cv <- train(log(charges) ~ age + smoker, data = costs, method = 
+               "lm", trControl = train, na.action = na.omit)
+cv
+```
+
+Although all the models have a similar RMSE, .39 - .46, the linear regression model is misleading since the data is not well explained linearly. Between the regression tree and boosted model, the regression tree, even without pruning, has a surprisingly lower RMSE which suggests it is the better model.
+
