@@ -34,7 +34,7 @@ library(dplyr)
 ```
 
 ```{r pressure, include=FALSE}
-costs <- read.csv('/Users/olinyoder/Desktop/Spring 2023/BSAN 440/Datasets/insurance.csv')
+costs <- read.csv('data.csv')
 ```
 
 ## Data Dictionary
